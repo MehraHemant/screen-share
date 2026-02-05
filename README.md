@@ -53,3 +53,23 @@ npm run start
 3. **/view/[sessionId]** — Watch the shared tab (view-only, optional unmute for audio).
 
 All logic runs in the Next.js app; Socket.io uses the same port via the custom server.
+
+---
+
+## Deploying to Vercel (frontend only)
+
+**Vercel does not run a persistent Node server or WebSockets.** The custom server (and Socket.io) does not run on Vercel, so `wss://your-app.vercel.app/socket.io` will always fail.
+
+**Fix:** Run the signaling server elsewhere and point the frontend at it.
+
+1. **Deploy the standalone signaling server** (in this repo: `/signaling`) to **Railway**, **Fly.io**, or **Render**:
+   - In the repo, open the `signaling` folder.
+   - Connect it to Railway/Fly.io/Render and deploy (build: `npm install && npm run build`, start: `npm start`).
+   - Set env: `CORS_ORIGIN=https://screen-share-web-mu.vercel.app` (your Vercel URL).
+   - Note the public URL (e.g. `https://your-signaling.up.railway.app`).
+
+2. **In Vercel** (your Next.js project): add an environment variable:
+   - **Name:** `NEXT_PUBLIC_SIGNALING_URL`  
+   - **Value:** `https://your-signaling.up.railway.app` (no trailing slash)
+
+3. Redeploy the frontend on Vercel. The app will connect to your signaling server and WebSockets will work.
