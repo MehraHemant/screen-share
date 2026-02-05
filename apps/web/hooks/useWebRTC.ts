@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useEffect } from "react";
+import { useCallback, useRef, useEffect, useState } from "react";
 import {
   createPeerConnection,
   createOffer,
@@ -18,19 +18,26 @@ interface UseWebRTCSharerOptions {
   socket: SignalingSocket | null;
   sessionId: string;
   stream: MediaStream | null;
+  micStream?: MediaStream | null;
   onViewerCount?: (count: number) => void;
+  onViewerMicStream?: (viewerId: string, stream: MediaStream) => void;
 }
 
 export function useWebRTCSharer({
   socket,
   sessionId,
   stream,
+  micStream = null,
   onViewerCount,
+  onViewerMicStream,
 }: UseWebRTCSharerOptions) {
   const pcMapRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const viewerMicPcMapRef = useRef<Map<string, RTCPeerConnection>>(new Map());
   const streamRef = useRef<MediaStream | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
 
   streamRef.current = stream;
+  micStreamRef.current = micStream;
 
   const createPeerForViewer = useCallback(
     async (viewerId: string) => {
@@ -40,6 +47,9 @@ export function useWebRTCSharer({
 
       streamRef.current.getTracks().forEach((track) => {
         pc.addTrack(track, streamRef.current!);
+      });
+      micStreamRef.current?.getTracks().forEach((track) => {
+        pc.addTrack(track, micStreamRef.current!);
       });
 
       pc.onicecandidate = (e) => {
@@ -79,27 +89,91 @@ export function useWebRTCSharer({
       onViewerCount?.(payload.viewerCount);
     };
 
-    const handleViewerLeft = (payload: { viewerCount: number }) => {
+    const handleViewerLeft = (payload: { viewerId: string; viewerCount: number }) => {
+      const pc = viewerMicPcMapRef.current.get(payload.viewerId);
+      if (pc) {
+        closePeerConnection(pc);
+        viewerMicPcMapRef.current.delete(payload.viewerId);
+      }
       onViewerCount?.(payload.viewerCount);
+    };
+
+    const handleViewerMicOffer = async (payload: { from: string; sdp: RTCSessionDescriptionInit }) => {
+      const viewerId = payload.from;
+      const pc = createPeerConnection();
+      viewerMicPcMapRef.current.set(viewerId, pc);
+      pc.ontrack = (e) => {
+        if (e.streams[0]) onViewerMicStream?.(viewerId, e.streams[0]);
+      };
+      pc.onicecandidate = (e) => {
+        if (e.candidate) socket.emit("viewer-mic-ice", { to: viewerId, candidate: e.candidate });
+      };
+      await setRemoteDescription(pc, payload.sdp);
+      const answer = await createAnswer(pc);
+      await setLocalDescription(pc, answer);
+      socket.emit("viewer-mic-answer", { to: viewerId, sdp: answer });
+    };
+
+    const handleViewerMicAnswer = async (payload: { from: string; sdp: RTCSessionDescriptionInit }) => {
+      const pc = viewerMicPcMapRef.current.get(payload.from);
+      if (!pc) return;
+      await setRemoteDescription(pc, payload.sdp);
+    };
+
+    const handleViewerMicIce = async (payload: { from: string; candidate: RTCIceCandidateInit }) => {
+      const pc = viewerMicPcMapRef.current.get(payload.from);
+      if (!pc) return;
+      try {
+        await addIceCandidate(pc, payload.candidate);
+      } catch {
+        // ignore
+      }
     };
 
     socket.on("answer", handleAnswer);
     socket.on("ice-candidate", handleIceCandidate);
     socket.on("viewer-joined", handleViewerJoined);
     socket.on("viewer-left", handleViewerLeft);
+    socket.on("viewer-mic-offer", handleViewerMicOffer);
+    socket.on("viewer-mic-answer", handleViewerMicAnswer);
+    socket.on("viewer-mic-ice", handleViewerMicIce);
 
     return () => {
       socket.off("answer", handleAnswer);
       socket.off("ice-candidate", handleIceCandidate);
       socket.off("viewer-joined", handleViewerJoined);
       socket.off("viewer-left", handleViewerLeft);
+      socket.off("viewer-mic-offer", handleViewerMicOffer);
+      socket.off("viewer-mic-answer", handleViewerMicAnswer);
+      socket.off("viewer-mic-ice", handleViewerMicIce);
     };
-  }, [socket, sessionId, createPeerForViewer, onViewerCount]);
+  }, [socket, sessionId, createPeerForViewer, onViewerCount, onViewerMicStream]);
+
+  useEffect(() => {
+    if (!socket || !micStream) return;
+    const addMicToExisting = async () => {
+      const mic = micStreamRef.current;
+      if (!mic) return;
+      for (const [viewerId, pc] of pcMapRef.current) {
+        try {
+          mic.getTracks().forEach((track) => pc.addTrack(track, mic));
+          const offer = await createOffer(pc);
+          await setLocalDescription(pc, offer);
+          socket.emit("offer", { to: viewerId, sdp: offer });
+        } catch {
+          // ignore renegotiation errors
+        }
+      }
+    };
+    addMicToExisting();
+  }, [socket, micStream]);
 
   useEffect(() => {
     return () => {
       pcMapRef.current.forEach((pc) => closePeerConnection(pc));
       pcMapRef.current.clear();
+      viewerMicPcMapRef.current.forEach((pc) => closePeerConnection(pc));
+      viewerMicPcMapRef.current.clear();
     };
   }, []);
 
@@ -121,6 +195,7 @@ export function useWebRTCViewer({
 }: UseWebRTCViewerOptions) {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const sharerIdRef = useRef<string | null>(null);
+  const [sharerId, setSharerIdState] = useState<string | null>(null);
 
   const cleanup = useCallback(() => {
     if (pcRef.current) {
@@ -128,6 +203,7 @@ export function useWebRTCViewer({
       pcRef.current = null;
     }
     sharerIdRef.current = null;
+    setSharerIdState(null);
     onStateChange?.("closed");
   }, [onStateChange]);
 
@@ -139,6 +215,7 @@ export function useWebRTCViewer({
         closePeerConnection(pcRef.current);
       }
       sharerIdRef.current = payload.from;
+      setSharerIdState(payload.from);
       onStateChange?.("connecting");
 
       const pc = createPeerConnection();
@@ -201,5 +278,5 @@ export function useWebRTCViewer({
     };
   }, [socket, sessionId, onStream, onStateChange, cleanup]);
 
-  return { cleanup };
+  return { cleanup, sharerId };
 }

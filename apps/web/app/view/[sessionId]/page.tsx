@@ -1,11 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { VideoPlayer } from "@/components/VideoPlayer";
 import { Controls, Button } from "@/components/Controls";
+import { ChatPanel } from "@/components/ChatPanel";
 import { useSocket } from "@/hooks/useSocket";
 import { useWebRTCViewer, type WebRTCState } from "@/hooks/useWebRTC";
+import { useViewerMicSend } from "@/hooks/useViewerMicSend";
+import { useMic } from "@/hooks/useMic";
+import { useChat } from "@/hooks/useChat";
 
 function ViewPageContent() {
   const params = useParams();
@@ -15,16 +19,48 @@ function ViewPageContent() {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [webrtcState, setWebrtcState] = useState<WebRTCState>("idle");
   const [joinError, setJoinError] = useState<string | null>(null);
-  const [muted, setMuted] = useState(true);
+  const [tabAudioMuted, setTabAudioMuted] = useState(true);
+  const [chatOpen, setChatOpen] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
+
+  const toggleFullscreen = useCallback(async () => {
+    const el = videoContainerRef.current;
+    if (!el) return;
+    try {
+      if (!document.fullscreenElement) {
+        await el.requestFullscreen();
+        setIsFullscreen(true);
+      } else {
+        await document.exitFullscreen();
+        setIsFullscreen(false);
+      }
+    } catch {
+      // Fullscreen not supported or denied
+    }
+  }, []);
+
+  useEffect(() => {
+    const handler = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener("fullscreenchange", handler);
+    return () => document.removeEventListener("fullscreenchange", handler);
+  }, []);
 
   const { getSocket, status: socketStatus, joinRoom } = useSocket();
+  const socket = getSocket();
+  const { messages, send: sendChat } = useChat(socket ?? null, sessionId);
+  const { micStream, isMuted: micMuted, startMic, toggleMute: toggleMicMute } = useMic();
 
-  useWebRTCViewer({
-    socket: getSocket() ?? null,
+  const { sharerId } = useWebRTCViewer({
+    socket: socket ?? null,
     sessionId,
     onStream: setRemoteStream,
     onStateChange: setWebrtcState,
   });
+
+  useViewerMicSend(socket ?? null, sharerId, micStream);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -76,53 +112,90 @@ function ViewPageContent() {
         </Button>
       </header>
 
-      <div className="flex-1 min-h-0 rounded-xl overflow-hidden bg-black border border-white/10 relative">
-        {!remoteStream ? (
-          <div className="h-full min-h-[320px] flex flex-col items-center justify-center gap-4 p-6">
-            {joinError && (
-              <p className="text-red-400 text-center">{joinError}</p>
-            )}
-            {waiting && !joinError && (
-              <p className="text-zinc-400 text-center">
-                Waiting for the host to start sharing…
-              </p>
-            )}
-            {failed && !joinError && (
-              <p className="text-zinc-400 text-center">
-                Connection lost. The host may have stopped sharing.
-              </p>
-            )}
-            <Button variant="secondary" onClick={goHome}>
-              Back to home
-            </Button>
-          </div>
-        ) : (
-          <>
-            <VideoPlayer
-              stream={remoteStream}
-              muted={muted}
-              className="w-full h-full min-h-[320px]"
-              aria-label="Shared tab stream"
-            />
-            <div className="absolute bottom-3 left-3">
-              <Button
-                variant="secondary"
-                onClick={() => setMuted((m) => !m)}
-                title={muted ? "Turn on tab audio" : "Mute tab audio"}
-              >
-                {muted ? "🔇 Unmute tab audio" : "🔊 Tab audio on"}
+      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div
+          ref={videoContainerRef}
+          className="lg:col-span-2 flex flex-col min-h-0 rounded-xl overflow-hidden bg-black border border-white/10 relative"
+        >
+          {!remoteStream ? (
+            <div className="h-full min-h-[320px] flex flex-col items-center justify-center gap-4 p-6">
+              {joinError && (
+                <p className="text-red-400 text-center">{joinError}</p>
+              )}
+              {waiting && !joinError && (
+                <p className="text-zinc-400 text-center">
+                  Waiting for the host to start sharing…
+                </p>
+              )}
+              {failed && !joinError && (
+                <p className="text-zinc-400 text-center">
+                  Connection lost. The host may have stopped sharing.
+                </p>
+              )}
+              <Button variant="secondary" onClick={goHome}>
+                Back to home
               </Button>
             </div>
-          </>
-        )}
+          ) : (
+            <>
+              <VideoPlayer
+                stream={remoteStream}
+                muted={tabAudioMuted}
+                className="w-full h-full min-h-[320px]"
+                aria-label="Shared tab stream"
+              />
+              <div className="absolute bottom-3 left-3 flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => setTabAudioMuted((m) => !m)}
+                  title={tabAudioMuted ? "Hear screen + host voice" : "Mute screen sound"}
+                >
+                  {tabAudioMuted ? "🔇 Unmute screen sound" : "🔊 Screen sound on"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={toggleFullscreen}
+                  title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                >
+                  {isFullscreen ? "⛶ Exit fullscreen" : "⛶ Fullscreen"}
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="flex flex-col min-h-0 gap-2">
+          <div className="flex flex-wrap gap-2">
+            {webrtcState === "connected" && (
+              <>
+                {!micStream ? (
+                  <Button variant="secondary" onClick={() => startMic()}>
+                    🎤 Turn on mic
+                  </Button>
+                ) : (
+                  <Button
+                    variant={micMuted ? "secondary" : "primary"}
+                    onClick={toggleMicMute}
+                    title={micMuted ? "Unmute mic" : "Mute mic"}
+                  >
+                    {micMuted ? "🔇 Mic muted" : "🔊 Mic on"}
+                  </Button>
+                )}
+              </>
+            )}
+          </div>
+          <ChatPanel
+            messages={messages}
+            onSend={sendChat}
+            myRole="viewer"
+            isOpen={chatOpen}
+            onToggle={() => setChatOpen((o) => !o)}
+          />
+        </div>
       </div>
 
-      <div className="mt-4">
-        <Controls>
-          <span className="text-sm text-zinc-500">
-            Status: {webrtcState} · Socket: {socketStatus}
-          </span>
-        </Controls>
+      <div className="mt-2 text-sm text-zinc-500">
+        Status: {webrtcState} · Socket: {socketStatus}
       </div>
     </main>
   );

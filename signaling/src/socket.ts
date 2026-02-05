@@ -113,6 +113,35 @@ export function createSocketServer(httpServer: Server): SocketIoServer {
       });
     });
 
+    socket.on("chat-message", (payload: { text?: string }) => {
+      if (!currentSessionId || !payload?.text?.trim()) return;
+      const role = currentRole === "sharer" ? "sharer" : "viewer";
+      io.to(currentSessionId).emit("chat-message", {
+        from: socket.id,
+        role,
+        text: String(payload.text).trim().slice(0, 2000),
+        ts: Date.now(),
+      });
+    });
+
+    socket.on("viewer-mic-offer", (payload: { to: string; sdp: RTCSessionDescriptionInit }) => {
+      if (!currentSessionId || currentRole !== "viewer") return;
+      socket.to(payload.to).emit("viewer-mic-offer", { from: socket.id, sdp: payload.sdp });
+    });
+
+    socket.on("viewer-mic-answer", (payload: { to: string; sdp: RTCSessionDescriptionInit }) => {
+      if (!currentSessionId || currentRole !== "sharer") return;
+      socket.to(payload.to).emit("viewer-mic-answer", { from: socket.id, sdp: payload.sdp });
+    });
+
+    socket.on("viewer-mic-ice", (payload: { to: string; candidate: RTCIceCandidateInit }) => {
+      if (!currentSessionId) return;
+      socket.to(payload.to).emit("viewer-mic-ice", {
+        from: socket.id,
+        candidate: payload.candidate,
+      });
+    });
+
     socket.on("disconnect", () => {
       if (!currentSessionId) return;
       if (currentRole === "sharer") {

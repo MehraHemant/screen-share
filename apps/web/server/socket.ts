@@ -23,6 +23,10 @@ export type SignalingEvents = {
   "viewer-joined": { viewerId: string; viewerCount: number };
   "viewer-left": { viewerId: string; viewerCount: number };
   "sharer-left": void;
+  "chat-message": { text: string };
+  "viewer-mic-offer": { to: string; sdp: RTCSessionDescriptionInit };
+  "viewer-mic-answer": { to: string; sdp: RTCSessionDescriptionInit };
+  "viewer-mic-ice": { to: string; candidate: RTCIceCandidateInit };
 };
 
 export function createSocketServer(httpServer: Server): SocketIoServer {
@@ -126,6 +130,41 @@ export function createSocketServer(httpServer: Server): SocketIoServer {
     socket.on("ice-candidate", (payload: SignalingEvents["ice-candidate"]) => {
       if (!currentSessionId) return;
       socket.to(payload.to).emit("ice-candidate", {
+        from: socket.id,
+        candidate: payload.candidate,
+      });
+    });
+
+    socket.on("chat-message", (payload: SignalingEvents["chat-message"]) => {
+      if (!currentSessionId || !payload?.text?.trim()) return;
+      const role = currentRole === "sharer" ? "sharer" : "viewer";
+      io.to(currentSessionId).emit("chat-message", {
+        from: socket.id,
+        role,
+        text: payload.text.trim().slice(0, 2000),
+        ts: Date.now(),
+      });
+    });
+
+    socket.on("viewer-mic-offer", (payload: SignalingEvents["viewer-mic-offer"]) => {
+      if (!currentSessionId || currentRole !== "viewer") return;
+      socket.to(payload.to).emit("viewer-mic-offer", {
+        from: socket.id,
+        sdp: payload.sdp,
+      });
+    });
+
+    socket.on("viewer-mic-answer", (payload: SignalingEvents["viewer-mic-answer"]) => {
+      if (!currentSessionId || currentRole !== "sharer") return;
+      socket.to(payload.to).emit("viewer-mic-answer", {
+        from: socket.id,
+        sdp: payload.sdp,
+      });
+    });
+
+    socket.on("viewer-mic-ice", (payload: SignalingEvents["viewer-mic-ice"]) => {
+      if (!currentSessionId) return;
+      socket.to(payload.to).emit("viewer-mic-ice", {
         from: socket.id,
         candidate: payload.candidate,
       });
