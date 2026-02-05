@@ -12,15 +12,16 @@ Socket.io signaling only. Use this when the **frontend is on Vercel** (Vercel ca
 
 ## Deploy to Fly.io
 
-From the `signaling` folder:
+From the `signaling` folder (uses `fly.toml` + `Dockerfile`):
 
 ```bash
+cd signaling
 fly launch
 fly secrets set CORS_ORIGIN=https://your-app.vercel.app
 fly deploy
 ```
 
-Then set `NEXT_PUBLIC_SIGNALING_URL=https://your-app.fly.dev` in Vercel.
+Then set `NEXT_PUBLIC_SIGNALING_URL=https://your-app.fly.dev` in Vercel (no trailing slash).
 
 ## Local
 
