@@ -1,5 +1,5 @@
-import { Server as HttpServer } from "http";
-import { Server, Socket } from "socket.io";
+import type { Server } from "http";
+import { Server as SocketIoServer, Socket } from "socket.io";
 import {
   isValidSessionId,
   getOrCreateRoom,
@@ -25,8 +25,9 @@ export type SignalingEvents = {
   "sharer-left": void;
 };
 
-export function createSocketServer(httpServer: HttpServer): Server {
-  const io = new Server(httpServer, {
+export function createSocketServer(httpServer: Server): SocketIoServer {
+  const io = new SocketIoServer(httpServer, {
+    path: "/socket.io",
     cors: {
       origin: process.env.CORS_ORIGIN ?? "*",
       methods: ["GET", "POST"],
