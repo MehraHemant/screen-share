@@ -1,0 +1,21 @@
+{
+  "name": "screen-share-monorepo",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently --names \"server,web\" --prefix-colors \"cyan,magenta\" \"npm run dev:server\" \"npm run dev:web\"",
+    "build": "turbo run build",
+    "start": "turbo run start",
+    "dev:web": "turbo run dev --filter=web",
+    "dev:server": "turbo run dev --filter=server",
+    "lint": "turbo run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "turbo": "^2.8.3"
+  },
+  "workspaces": ["apps/*"],
+  "packageManager": "npm@10.0.0",
+  "engines": {
+    "node": ">=18"
+  }
+}
